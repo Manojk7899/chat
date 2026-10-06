@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Chat</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, sans-serif;
+    background: #1e1f29; color: #e6e6e6;
+    display: flex; height: 100vh;
+  }
+  #sidebar {
+    width: 220px; background: #262735; padding: 16px;
+    display: flex; flex-direction: column; gap: 20px; overflow-y: auto;
+  }
+  #sidebar h3 { margin: 0 0 8px 0; font-size: 13px; color: #9a9ab0; text-transform: uppercase; letter-spacing: 0.05em; }
+  .room-btn, .friend-btn {
+    display: block; width: 100%; text-align: left;
+    background: #33344a; color: #e6e6e6; border: none;
+    padding: 8px 10px; margin-bottom: 6px; border-radius: 6px;
+    cursor: pointer; font-size: 14px;
+  }
+  .room-btn:hover, .friend-btn:hover { background: #40415c; }
+  .room-btn.active { background: #5865f2; color: white; }
+  #add-friend-row { display: flex; gap: 6px; }
+  #add-friend-row input { flex: 1; min-width: 0; }
+  #main { flex: 1; display: flex; flex-direction: column; }
+  #header {
+    padding: 12px 16px; background: #262735; border-bottom: 1px solid #33344a;
+    font-weight: 600;
+  }
+  #messages {
+    flex: 1; padding: 16px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .msg { padding: 4px 0; font-size: 14px; }
+  .msg.system { color: #f5a623; font-style: italic; }
+  .msg.private { color: #c678dd; }
+  .msg.self { color: #61dafb; }
+  .msg.error { color: #e06c75; }
+  #input-row { display: flex; padding: 12px; gap: 8px; background: #262735; }
+  #input { flex: 1; padding: 10px; border-radius: 6px; border: none; background: #1e1f29; color: #e6e6e6; }
+  #input:focus { outline: 2px solid #5865f2; }
+  button.send { padding: 10px 18px; border: none; border-radius: 6px; background: #5865f2; color: white; cursor: pointer; }
+  button.send:hover { background: #4752c4; }
+</style>
+</head>
+<body>
+
+  <div id="sidebar">
+    <div>
+      <h3>Rooms</h3>
+      <button class="room-btn" data-room="general">#general</button>
+      <button class="room-btn" data-room="random">#random</button>
+      <button class="room-btn" data-room="tech">#tech</button>
+    </div>
+
+    <div>
+      <h3>Friends</h3>
+      <div id="friends-list"></div>
+      <div id="add-friend-row">
+        <input id="friend-input" type="text" placeholder="username">
+        <button class="send" onclick="addFriend()">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="header">#general</div>
+    <div id="messages"></div>
+    <div id="input-row">
+      <input id="input" type="text" placeholder="Type a message...">
+      <button class="send" onclick="send()">Send</button>
+    </div>
+  </div>
+
+<script>
+  const ws = new WebSocket("ws://127.0.0.1:8083");
+  const messages = document.getElementById("messages");
+  const header = document.getElementById("header");
+  const input = document.getElementById("input");
+  let askedUsername = false;
+  let currentRoom = "general";
+
+  function addMessage(text, cls) {
+    const div = document.createElement("div");
+    div.className = "msg" + (cls ? " " + cls : "");
+    div.textContent = text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  ws.onmessage = (event) => {
+    if (!askedUsername) {
+      const name = prompt(event.data);
+      ws.send(name);
+      askedUsername = true;
+      return;
+    }
+    const text = event.data;
+    let cls = "";
+    if (text.includes("has joined") || text.includes("has left") || text.includes("shutting down")) cls = "system";
+    else if (text.startsWith("[private]")) cls = "private";
+    else if (text.includes("too fast") || text === "User not found") cls = "error";
+    addMessage(text, cls);
+  };
+
+  function send() {
+    if (input.value.trim() === "") return;
+    ws.send(input.value);
+    input.value = "";
+  }
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+  // --- Room buttons ---
+  document.querySelectorAll(".room-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const room = btn.dataset.room;
+      joinRoom(room);
+    });
+  });
+
+  function joinRoom(room) {
+    ws.send("/join " + room);
+    currentRoom = room;
+    header.textContent = "#" + room;
+    document.querySelectorAll(".room-btn").forEach(b => {
+      b.classList.toggle("active", b.dataset.room === room);
+    });
+    messages.innerHTML = ""; // history will replay from server
+  }
+
+  // highlight #general as default active room on load
+  document.querySelector('.room-btn[data-room="general"]').classList.add("active");
+
+  // --- Friends list (saved locally in the browser, not on the server) ---
+  function loadFriends() {
+    return JSON.parse(localStorage.getItem("chat_friends") || "[]");
+  }
+  function saveFriends(list) {
+    localStorage.setItem("chat_friends", JSON.stringify(list));
+  }
+  function renderFriends() {
+    const list = loadFriends();
+    const container = document.getElementById("friends-list");
+    container.innerHTML = "";
+    list.forEach(name => {
+      const btn = document.createElement("button");
+      btn.className = "friend-btn";
+      btn.textContent = name;
+      btn.onclick = () => {
+        input.value = "/msg " + name + " ";
+        input.focus();
+      };
+      container.appendChild(btn);
+    });
+  }
+  function addFriend() {
+    const nameInput = document.getElementById("friend-input");
+    const name = nameInput.value.trim();
+    if (!name) return;
+    const list = loadFriends();
+    if (!list.includes(name)) {
+      list.push(name);
+      saveFriends(list);
+      renderFriends();
+    }
+    nameInput.value = "";
+  }
+  renderFriends();
+</script>
+</body>
+</html>
